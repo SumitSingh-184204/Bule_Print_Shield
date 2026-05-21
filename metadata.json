@@ -1,0 +1,6 @@
+{
+  "name": "AI Cybersecurity Consultant & Architect",
+  "description": "An intelligent cybersecurity architect and compliance advisor that designs secure systems, models threats, simulates attacks, and generates audits.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
