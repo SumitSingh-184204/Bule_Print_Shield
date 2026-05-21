@@ -1,0 +1,58 @@
+name: Deploy Frontend to GitHub Pages
+
+on:
+  push:
+    branches:
+      - main
+      - master
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js Build Engine
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install Project Dependencies
+        run: npm ci
+
+      - name: Compile and Bundle React Frontend
+        env:
+          # If hosting on user/org page, base is '/'
+          # If hosting on project page, set base to '/<repository-name>/'
+          # If set to './', Vite builds relative resource tags matching both layouts
+          VITE_BASE_PATH: "./"
+          # Set this variable in your GitHub repository secrets if your backend is hosted separately:
+          # VITE_API_BASE_URL: "https://your-express-app-cloudrun.dev"
+          VITE_API_BASE_URL: ""
+        run: npm run build
+
+      - name: Configure GitHub Pages Web Server
+        uses: actions/configure-pages@v5
+
+      - name: Package compiled static assets
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: './dist'
+
+      - name: Deploy Static Build to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -15,6 +15,17 @@ dotenv.config();
 const app = express();
 app.use(express.json());
 
+// Enable CORS for static frontends (like GitHub Pages) talking to this hosted dynamic API backend
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization");
+  res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PATCH, PUT, DELETE");
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(200);
+  }
+  next();
+});
+
 const PORT = 3000;
 
 // Initialize Gemini Client
@@ -205,9 +216,9 @@ app.post('/api/threat-intel', async (req, res) => {
   const targetTechs = Array.isArray(techStack) ? techStack : [];
   const targetIndustry = industry || 'Cloud Application';
 
-  // Retrieve API Keys from environment variables
-  const otxApiKey = process.env.OTX_API_KEY;
-  const vtApiKey = process.env.VIRUSTOTAL_API_KEY;
+  // Retrieve API Keys from environment variables or custom request body parameters
+  const otxApiKey = req.body.otxApiKey || process.env.OTX_API_KEY;
+  const vtApiKey = req.body.vtApiKey || process.env.VIRUSTOTAL_API_KEY;
 
   let liveCisaVulnerabilities: any[] = [];
   let fetchedOtxPulses: any[] = [];

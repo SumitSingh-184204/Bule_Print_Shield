@@ -36,14 +36,21 @@ import {
   Heart,
   Globe,
   Loader,
-  BookOpen
+  BookOpen,
+  Activity,
+  Radar,
+  Bell,
+  Check
 } from 'lucide-react';
 import { Project, Threat, SecurityLayer, ComplianceItem, AnalysisResult, SimulationLog } from './types';
 import { INDUSTRIES, TECH_STACKS, AUTH_TYPES, DATA_SENSITIVITIES, DEPLOYMENT_MODELS, APIS_LIST, USER_ROLES, SCALE_OPTIONS, generateMockAnalysis } from './utils/cyberData';
 
+// API dynamic base URL configuration to support static hosts like GitHub Pages connecting to custom backend environments
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
+
 export default function App() {
   // Page routing
-  const [activeTab, setActiveTab] = useState<'landing' | 'new-project' | 'dashboard' | 'visualizer' | 'simulator' | 'compliance' | 'devsecops' | 'ai-chat' | 'history'>('landing');
+  const [activeTab, setActiveTab] = useState<'landing' | 'new-project' | 'dashboard' | 'visualizer' | 'simulator' | 'compliance' | 'devsecops' | 'ai-chat' | 'history' | 'threat-intel' | 'vuln-scanner'>('landing');
   
   // User Authentication simulation state
   const [userProfile, setUserProfile] = useState<{ email: string; role: string; token: string } | null>({
@@ -109,10 +116,20 @@ export default function App() {
   const [isFetchingIntel, setIsFetchingIntel] = useState(false);
   const [intelError, setIntelError] = useState<string | null>(null);
   const [hasInjectedLiveThreats, setHasInjectedLiveThreats] = useState(false);
+  const [customOtxKey, setCustomOtxKey] = useState<string>(() => localStorage.getItem('custom_otx_key') || '');
+  const [customVtKey, setCustomVtKey] = useState<string>(() => localStorage.getItem('custom_vt_key') || '');
+  const [useSimulatedFeeds, setUseSimulatedFeeds] = useState<boolean>(true);
 
   // What-If Scenario Sandbox Modeler states
   const [isWhatIfMode, setIsWhatIfMode] = useState(false);
   const [whatIfProject, setWhatIfProject] = useState<Project | null>(null);
+
+  // --- REAL-TIME DEPLOYED INFRASTRUCTURE CONFIG SCANNER STATES ---
+  const [isContinuousScannerOn, setIsContinuousScannerOn] = useState(true);
+  const [scannerLogs, setScannerLogs] = useState<string[]>([]);
+  const [scannerToast, setScannerToast] = useState<{ message: string; type: 'success' | 'warning' | 'info' } | null>(null);
+  const [isScannerScanning, setIsScannerScanning] = useState(false);
+  const [scanProgress, setScanProgress] = useState(100);
 
   // Initialize a baseline analysis on startup
   useEffect(() => {
@@ -218,7 +235,7 @@ export default function App() {
     };
 
     try {
-      const response = await fetch('/api/analyze', {
+      const response = await fetch(`${API_BASE_URL}/api/analyze`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ project: newProject }),
@@ -289,6 +306,250 @@ export default function App() {
     }
   };
 
+  // --- REAL-TIME VULNERABILITY MONITORING & REMEDIATION ENGINE ---
+  const getScannerAlerts = (proj: Project | null) => {
+    if (!proj || !proj.analysis) return [];
+    
+    const layers = proj.analysis.securityLayers;
+    const isWafEnabled = layers.find(l => l.id === 'lay-waf')?.enabled;
+    const isFwEnabled = layers.find(l => l.id === 'lay-fw')?.enabled;
+    const isIamEnabled = layers.find(l => l.id === 'lay-iam')?.enabled;
+    const isSiemEnabled = layers.find(l => l.id === 'lay-siem')?.enabled;
+    const isEncEnabled = layers.find(l => l.id === 'lay-enc')?.enabled;
+    const isGwEnabled = layers.find(l => l.id === 'lay-gw')?.enabled;
+    const isSegEnabled = layers.find(l => l.id === 'lay-seg')?.enabled;
+    const isZtEnabled = layers.find(l => l.id === 'lay-zt')?.enabled;
+
+    const list: any[] = [];
+
+    // Check 1: Ingress Boundary Protection (WAF)
+    list.push({
+      id: 'vuln-waf',
+      severity: 'CRITICAL',
+      resource: 'Public Loadbalancer Layer (Port 80/443)',
+      category: 'Insecure Ingress Routing',
+      name: 'Unprotected HTTP Public Ingress Boundary',
+      description: 'External user and public HTTP transactions bypass application layer analysis. This allows standard automated payloads (OWASP SQLi, Log4J, Command Injection, XSS) to hit downstream containers unchecked.',
+      triggerCondition: 'WAF layer disabled on public network boundaries',
+      remediationGuidance: 'Activate Web Application Firewall (WAF) to sanitize URL vectors and block malicious HTTP signatures in headers or POST requests.',
+      layerIdToMitigate: 'lay-waf',
+      command: 'aws wafv2 create-web-acl --name IngressGuard --scope REGIONAL --default-action Allow={}',
+      status: isWafEnabled ? 'Resolved' : 'Open'
+    });
+
+    // Check 2: VPC Network Segmentation Rules (Firewall ports)
+    list.push({
+      id: 'vuln-fw',
+      severity: 'HIGH',
+      resource: `VPC Ingress Group (${proj.techStack.join(', ')})`,
+      category: 'Access Permissiveness',
+      name: 'Permissive External VPC Port Listeners (Any-to-Any)',
+      description: 'Default ingress filters do not isolate database listen ports (e.g., 5432 / 27017) or remote system SSH endpoints. Any internet-wide port scanner is able to locate, handshake, and brute-force the databases.',
+      triggerCondition: 'Network Firewall layer is disabled',
+      remediationGuidance: 'Activate the Network Firewall to lock down container boundaries, restrict listening ports strictly to private CIDR blocks, and allow only secure proxy connections.',
+      layerIdToMitigate: 'lay-fw',
+      command: 'gcloud compute firewall-rules create deny-public --direction=INGRESS --rules=tcp:5432,tcp:27017 --action=DENY --src-ranges=0.0.0.0/0',
+      status: isFwEnabled ? 'Resolved' : 'Open'
+    });
+
+    // Check 3: At-Rest Data Encryption (Encryption)
+    const isSensitive = ['Restricted/Financial', 'Critical Health Data', 'State Secrets', 'Internal/PII'].includes(proj.dataSensitivity);
+    if (isSensitive) {
+      list.push({
+        id: 'vuln-enc',
+        severity: proj.dataSensitivity === 'State Secrets' || proj.dataSensitivity === 'Critical Health Data' ? 'CRITICAL' : 'HIGH',
+        resource: `Database Server Volumes (${proj.techStack.find(t=>t.includes('Postgres') || t.includes('Mongo')) || 'Volume Store'})`,
+        category: 'Missing Cryptographic Protection',
+        name: 'Plain-Text Deployed Disk Volumes (State Directories Exposed)',
+        description: 'Highly sensitive user profile parameters or financial legibility logs are recorded in plaintext on underlying storage nodes. An adversary gaining storage read access or obtaining a snapshots dump will circumvent application layers completely.',
+        triggerCondition: 'Sensitive Data Profile Active + Database AES-256 Storage disabled',
+        remediationGuidance: 'Enable localized database transparent filesystem encryption, securing state data against offline analysis or directory breaches.',
+        layerIdToMitigate: 'lay-enc',
+        command: 'gcloud kms keys create pg-key --location=global --keyring=db-ring --purpose=encryption',
+        status: isEncEnabled ? 'Resolved' : 'Open'
+      });
+    }
+
+    // Check 4: Rate Limiting & Gateway Access
+    if (proj.apisUsed && proj.apisUsed.length > 0) {
+      list.push({
+        id: 'vuln-gw',
+        severity: 'HIGH',
+        resource: 'API Controller Access Routers',
+        category: 'Lack of API Controls',
+        name: 'Direct Backend Access Routing (API Throttling Defect)',
+        description: 'External consumer APIs connect directly to web controllers. Lacking rate-limiters, bad actors can trigger memory leak sequences or overwhelm service queues with rapid nested API calls.',
+        triggerCondition: 'APIs activated without a Throttling Gateway Proxy',
+        remediationGuidance: 'Establish API Gateway rate-limit validation limits (e.g., 100 queries/min per token) and inject mandatory validation token keys.',
+        layerIdToMitigate: 'lay-gw',
+        command: 'npm install express-rate-limit express-jwt --save',
+        status: isGwEnabled ? 'Resolved' : 'Open'
+      });
+    }
+
+    // Check 5: Flat Container Networks (Kubernetes Pod Overlay)
+    if (proj.techStack.includes('Docker') || proj.techStack.includes('Kubernetes')) {
+      list.push({
+        id: 'vuln-seg',
+        severity: 'HIGH',
+        resource: 'Pod-to-Pod Virtual Network overlay',
+        category: 'Flawed Network Topology',
+        name: 'Flat Cluster Layout / Lateral Propagation Vector',
+        description: 'Pods in the Kubernetes namespace can link directly to any other running services. If the public frontend React server is compromised, the attacker can leverage command loops to directly connect to port 5432 on the PostgreSQL container.',
+        triggerCondition: 'Virtualization container stacks active + Segment isolation disabled',
+        remediationGuidance: 'Enable Network Segmentation. Define Calico or standard Kubernetes NetworkPolicy templates restricting database port access to specialized backend pods.',
+        layerIdToMitigate: 'lay-seg',
+        command: 'kubectl label namespace default db-access=granted',
+        status: isSegEnabled ? 'Resolved' : 'Open'
+      });
+    }
+
+    // Check 6: Zero Trust Policy on High Value Assets
+    if (isSensitive) {
+      list.push({
+        id: 'vuln-zt',
+        severity: 'HIGH',
+        resource: 'Inter-Container RPC (gRPC / REST)',
+        category: 'Access Permissiveness',
+        name: 'Blind Intra-Network Service Handshake',
+        description: 'Internal services trust each other based strictly on incoming private IP addresses. This allows a bypassed frontend container to execute authorized state manipulations or spoof administrative requests.',
+        triggerCondition: 'Critical sensitivity active + Zero Trust authorization disabled',
+        remediationGuidance: 'Enforce structural Zero Trust Authorization models. Implement Istio mutual TLS (mTLS) to force every service to handshake cryptographically.',
+        layerIdToMitigate: 'lay-zt',
+        command: 'istioctl install --set profile=default -y',
+        status: isZtEnabled ? 'Resolved' : 'Open'
+      });
+    }
+
+    // Check 7: Audit SIEM Alerts Aggregation
+    list.push({
+      id: 'vuln-siem',
+      severity: 'MEDIUM',
+      resource: 'Elastic/Logstash Log Harvesters',
+      category: 'Inadequate Logging Analytics',
+      name: 'Silent System Auditing (Local Node Logging Buffer)',
+      description: 'Host events, auth logins, and docker logs are stored locally but fail to aggregate in a central dashboard. System operates blindly; standard brute-forcing of credentials will remain undiscovered.',
+      triggerCondition: 'Continuous SIEM Logging harvester is disabled',
+      remediationGuidance: 'Initiate central SIEM Threat Logging, piping stdout to Elasticsearch or BigQuery for real-time telemetry analysis.',
+      layerIdToMitigate: 'lay-siem',
+      command: 'docker run -d -p 5601:5601 --name kibana-terminal docker.elastic.co/kibana:8.10.1',
+      status: isSiemEnabled ? 'Resolved' : 'Open'
+    });
+
+    // Check 8: Basic Authentication Protocol (BasicAuth)
+    if (proj.authType === 'BasicAuth') {
+      list.push({
+        id: 'vuln-basicauth',
+        severity: 'CRITICAL',
+        resource: 'API Security Middleware',
+        category: 'Weak Authentication Scheme',
+        name: 'Credentials Transmitted in Plain-Text Base64 HTTP Headers',
+        description: 'Basic Authentication is active. Client username and password credential tags are submitted with every single query inside the "Authorization: Basic" header. Highly vulnerable to MITM interception.',
+        triggerCondition: "BasicAuth configured as the project's authentication standard",
+        remediationGuidance: 'Migrate the authentication mechanism in the Plan panel to JWT, OAuth2, or MFA to replace usernames and passwords with temporary cryptographic tokens.',
+        layerIdToMitigate: 'lay-iam',
+        command: 'npm deprecate passport-http',
+        status: isIamEnabled && proj.authType !== 'BasicAuth' ? 'Resolved' : 'Open'
+      });
+    }
+
+    return list;
+  };
+
+  const remediateInfrastructureVulnerability = (layerId: string, vulnName: string) => {
+    const timeNow = new Date().toLocaleTimeString();
+    setScannerLogs(prev => [
+      `[${timeNow}] ⚙️ [REMEDIATE] Init command for: ${vulnName}...`,
+      `[${timeNow}] ⚙️ [REMEDIATE] Contacting Kubernetes API server gateway...`,
+      `[${timeNow}] ⚙️ [REMEDIATE] Activating Security Layer ID: ${layerId}...`,
+      `[${timeNow}] 🚀 [REMEDIATE] RESOLUTION SUCCESS: Deployed policies updated.`,
+      ...prev
+    ]);
+
+    // toggle corresponding layer!
+    toggleSecurityLayer(layerId);
+
+    setScannerToast({
+      message: `RESOLVED: "${vulnName}" has been successfully patched!`,
+      type: 'success'
+    });
+
+    setTimeout(() => {
+      setScannerToast(null);
+    }, 4500);
+  };
+
+  const triggerManualInfraScan = () => {
+    setIsScannerScanning(true);
+    setScanProgress(0);
+    
+    let prog = 0;
+    const interval = setInterval(() => {
+      prog += 20;
+      setScanProgress(prog);
+      const time = new Date().toLocaleTimeString();
+      
+      if (prog === 20) {
+        setScannerLogs(prev => [
+          `[${time}] ⚡ [SCANNER] Polling VPC container namespace security tags...`,
+          ...prev
+        ]);
+      } else if (prog === 40) {
+        setScannerLogs(prev => [
+          `[${time}] ⚡ [SCANNER] Verifying database TLS handshake profiles...`,
+          ...prev
+        ]);
+      } else if (prog === 60) {
+        setScannerLogs(prev => [
+          `[${time}] ⚡ [SCANNER] Inspecting ingress routing headers and WAF filters...`,
+          ...prev
+        ]);
+      } else if (prog === 80) {
+        setScannerLogs(prev => [
+          `[${time}] ⚡ [SCANNER] Validating IAM token parameters against target sensitive assets...`,
+          ...prev
+        ]);
+      } else if (prog === 100) {
+        clearInterval(interval);
+        setIsScannerScanning(false);
+        setScannerLogs(prev => [
+          `[${time}] ✅ [COMPLETE] Core Infrastructure configuration audit completed successfully!`,
+          ...prev
+        ]);
+        setScannerToast({
+          message: "Scan complete. Deployed infrastructure state synced.",
+          type: 'info'
+        });
+        setTimeout(() => setScannerToast(null), 3000);
+      }
+    }, 200);
+  };
+
+  // Background polling simulator for Continuous Scan mode
+  useEffect(() => {
+    const targetProj = isWhatIfMode ? whatIfProject : activeProject;
+    if (!isContinuousScannerOn || !targetProj) return;
+
+    // Log continuous monitor ping
+    const timestamp = new Date().toLocaleTimeString();
+    setScannerLogs(prev => [
+      `[${timestamp}] 🔎 [MONITOR] Performing real-time hardware rule audit...`,
+      `[${timestamp}] 🔎 [MONITOR] Active layers check: ${(targetProj.analysis?.securityLayers?.filter(l => l.enabled).map(l => l.name) || []).join(', ') || 'None'}`,
+      ...prev.slice(0, 40)
+    ]);
+
+    // Setup periodic polling log
+    const interval = setInterval(() => {
+      const time = new Date().toLocaleTimeString();
+      setScannerLogs(prev => [
+        `[${time}] 🔄 [HEARTBEAT] Deployed Node polling: Ingress Router, Redis Backend, persistent DB store verified.`,
+        ...prev.slice(0, 40)
+      ]);
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, [isContinuousScannerOn, activeProject?.analysis?.securityLayers, isWhatIfMode, whatIfProject?.analysis?.securityLayers]);
+
   // Fetch and correlate threat intelligence feeds from sources like CISA, AlienVault OTX & VirusTotal
   const fetchThreatIntelligence = async () => {
     const targetProj = isWhatIfMode ? whatIfProject : activeProject;
@@ -297,12 +558,14 @@ export default function App() {
     setIsFetchingIntel(true);
     setIntelError(null);
     try {
-      const response = await fetch('/api/threat-intel', {
+      const response = await fetch(`${API_BASE_URL}/api/threat-intel`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           techStack: targetProj.techStack,
-          industry: targetProj.industry
+          industry: targetProj.industry,
+          otxApiKey: useSimulatedFeeds ? undefined : customOtxKey,
+          vtApiKey: useSimulatedFeeds ? undefined : customVtKey
         })
       });
       if (response.ok) {
@@ -563,7 +826,7 @@ export default function App() {
     setIsChatSending(true);
 
     try {
-      const response = await fetch('/api/chat', {
+      const response = await fetch(`${API_BASE_URL}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -889,6 +1152,55 @@ public class SecurityConfiguration {
             </button>
 
             <button 
+              onClick={() => setActiveTab('threat-intel')}
+              disabled={!activeProject}
+              className={`w-full flex items-center justify-between text-left px-3 py-2 text-xs font-mono rounded tracking-wide transition-all ${
+                !activeProject ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer'
+              } ${
+                activeTab === 'threat-intel' 
+                  ? 'bg-amber-500/10 text-amber-450 border border-amber-500/30' 
+                  : 'text-[#999] hover:text-white hover:bg-[#111] border border-transparent'
+              }`}
+            >
+              <span className="flex items-center gap-2">
+                <Globe className="w-4 h-4 text-amber-500" />
+                AI THREAT INTEL
+              </span>
+              <span className="text-[9px] bg-amber-950/80 text-amber-400 px-1 border border-amber-900 rounded">LIVE FEED</span>
+            </button>
+
+            <button 
+              onClick={() => setActiveTab('vuln-scanner')}
+              disabled={!activeProject}
+              className={`w-full flex items-center justify-between text-left px-3 py-2 text-xs font-mono rounded tracking-wide transition-all ${
+                !activeProject ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer'
+              } ${
+                activeTab === 'vuln-scanner' 
+                  ? 'bg-red-500/10 text-red-400 border border-red-500/30' 
+                  : 'text-[#999] hover:text-white hover:bg-[#111] border border-transparent'
+              }`}
+            >
+              <span className="flex items-center gap-2">
+                <Radar className="w-4 h-4 text-red-500 animate-pulse" />
+                INFRA SCANNER
+              </span>
+              {activeProject ? (() => {
+                const openCount = getScannerAlerts(isWhatIfMode ? whatIfProject : activeProject).filter(a => a.status === 'Open').length;
+                return openCount > 0 ? (
+                  <span className="text-[9px] bg-red-500 text-white font-bold px-1.5 py-0.2 rounded-full animate-pulse shadow-[0_0_8px_rgba(239,68,68,0.6)]">
+                    {openCount} OPEN
+                  </span>
+                ) : (
+                  <span className="text-[8px] bg-green-950/45 text-green-400 border border-green-900 px-1 rounded uppercase font-bold">
+                    SECURED
+                  </span>
+                );
+              })() : (
+                <span className="text-[10px] text-[#444]">GUARD</span>
+              )}
+            </button>
+
+            <button 
               onClick={() => setActiveTab('visualizer')}
               disabled={!activeProject}
               className={`w-full flex items-center justify-between text-left px-3 py-2 text-xs font-mono rounded tracking-wide transition-all ${
@@ -1018,6 +1330,8 @@ public class SecurityConfiguration {
           {activeProject && (
             <>
               <button onClick={() => setActiveTab('dashboard')} className={`px-2 py-1 rounded ${activeTab === 'dashboard' ? 'bg-[#00f3ff] text-black' : 'text-[#888]'}`}>Dashboard</button>
+              <button onClick={() => setActiveTab('threat-intel')} className={`px-2 py-1 rounded ${activeTab === 'threat-intel' ? 'bg-[#00f3ff] text-black' : 'text-[#888]'}`}>Threat Intel</button>
+              <button onClick={() => setActiveTab('vuln-scanner')} className={`px-2 py-1 rounded ${activeTab === 'vuln-scanner' ? 'bg-[#00f3ff] text-black' : 'text-[#888]'}`}>Infra Scanner</button>
               <button onClick={() => setActiveTab('visualizer')} className={`px-2 py-1 rounded ${activeTab === 'visualizer' ? 'bg-[#00f3ff] text-black' : 'text-[#888]'}`}>Visualizer</button>
               <button onClick={() => setActiveTab('simulator')} className={`px-2 py-1 rounded ${activeTab === 'simulator' ? 'bg-[#00f3ff] text-black' : 'text-[#888]'}`}>Simulator</button>
               <button onClick={() => setActiveTab('compliance')} className={`px-2 py-1 rounded ${activeTab === 'compliance' ? 'bg-[#00f3ff] text-black' : 'text-[#888]'}`}>Compliance</button>
@@ -1950,6 +2264,297 @@ public class SecurityConfiguration {
               </div>
             );
           })()}
+
+          {/* PAGE 3.5: AI threat Intelligence Engine & Real-Time Feeds */}
+          {activeTab === 'threat-intel' && activeProject && activeProject.analysis && (
+            <div className="max-w-5xl mx-auto space-y-6">
+              <div className="border-b border-[#222] pb-4 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                <div>
+                  <h2 className="text-xl sm:text-2xl font-mono font-bold text-white uppercase tracking-wider flex items-center gap-2">
+                    <Globe className="w-5 h-5 text-amber-500 animate-pulse" /> AI THREAT INTELLIGENCE ENGINE (SOC)
+                  </h2>
+                  <p className="text-xs text-[#888] mt-1">
+                    Correlate active global threat vector indicators (CISA, AlienVault OTX, VirusTotal) with your architecture's technology array and compliance blueprint.
+                  </p>
+                </div>
+                <div className="flex gap-2">
+                  <span className="text-[10px] font-mono bg-cyan-950/40 text-[#00f3ff] border border-cyan-500/20 px-2.5 py-1 rounded">
+                    PROFILE: <span className="text-white font-bold">{activeProject.industry}</span>
+                  </span>
+                  <span className="text-[10px] font-mono bg-amber-950/40 text-amber-400 border border-amber-500/20 px-2.5 py-1 rounded">
+                    INTEL STATUS: <span className="text-white font-bold">{threatIntelData ? 'SYNCHRONIZED' : 'STANDBY'}</span>
+                  </span>
+                </div>
+              </div>
+
+              {/* Feed Control Terminal */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                
+                {/* Connection Controls */}
+                <div className="bg-[#0b0b0c] border border-amber-900/30 p-4 rounded-sm flex flex-col justify-between space-y-4">
+                  <div>
+                    <div className="flex items-center justify-between border-b border-[#1f1f1f] pb-1.5 mb-3">
+                      <span className="text-[10px] font-mono font-semibold text-gray-400 uppercase tracking-widest block flex items-center gap-1.5">
+                        <Settings className="w-3.5 h-3.5 text-amber-500" /> FEED CONFIGURATOR
+                      </span>
+                      <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
+                    </div>
+
+                    <p className="text-[11px] text-gray-400 font-mono leading-relaxed mb-4">
+                      Choose whether to query actual API endpoints or use our premium curated local fallback indicators. Configure keys to test account sync.
+                    </p>
+
+                    <div className="space-y-4">
+                      {/* Simulated Toggler */}
+                      <div className="flex items-center justify-between bg-[#040404] p-2 border border-[#222] rounded text-[11px] font-mono">
+                        <span className="text-gray-300">Curated Local Sandbox Feeds</span>
+                        <button
+                          onClick={() => setUseSimulatedFeeds(!useSimulatedFeeds)}
+                          className={`px-2.5 py-0.5 rounded text-[10px] uppercase font-bold transition-all cursor-pointer ${
+                            useSimulatedFeeds 
+                              ? 'bg-amber-500 text-black' 
+                              : 'bg-[#1a1a1a] text-gray-500 border border-[#333]'
+                          }`}
+                        >
+                          {useSimulatedFeeds ? 'ENABLED' : 'DISABLED'}
+                        </button>
+                      </div>
+
+                      {/* AlienVault key */}
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] font-mono text-gray-500 flex justify-between">
+                          <span>AlienVault OTX API Key</span>
+                          {customOtxKey ? <span className="text-green-400 font-bold">Custom Key Loaded</span> : <span className="text-yellow-600">Using Default</span>}
+                        </label>
+                        <input
+                          type="password"
+                          value={customOtxKey}
+                          onChange={(e) => {
+                            setCustomOtxKey(e.target.value);
+                            localStorage.setItem('custom_otx_key', e.target.value);
+                          }}
+                          disabled={useSimulatedFeeds}
+                          placeholder={useSimulatedFeeds ? "De-activate Sandbox feeds to modify keys" : "Enter OTX SDK Key..."}
+                          className="w-full bg-[#050505] border border-[#222] text-[11px] font-mono text-white p-2 rounded focus:outline-none focus:border-amber-500 disabled:opacity-40"
+                        />
+                      </div>
+
+                      {/* VirusTotal key */}
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] font-mono text-gray-500 flex justify-between">
+                          <span>VirusTotal API Key</span>
+                          {customVtKey ? <span className="text-green-400 font-bold">Custom Key Loaded</span> : <span className="text-yellow-600">Using Default</span>}
+                        </label>
+                        <input
+                          type="password"
+                          value={customVtKey}
+                          onChange={(e) => {
+                            setCustomVtKey(e.target.value);
+                            localStorage.setItem('custom_vt_key', e.target.value);
+                          }}
+                          disabled={useSimulatedFeeds}
+                          placeholder={useSimulatedFeeds ? "De-activate Sandbox feeds to modify keys" : "Enter VT SDK Key..."}
+                          className="w-full bg-[#050505] border border-[#222] text-[11px] font-mono text-white p-2 rounded focus:outline-none focus:border-amber-500 disabled:opacity-40"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="pt-2">
+                    <button
+                      onClick={fetchThreatIntelligence}
+                      disabled={isFetchingIntel}
+                      className="w-full bg-amber-500 text-black py-2 rounded font-mono text-[11px] font-extrabold hover:bg-amber-400 transition-all cursor-pointer flex items-center justify-center gap-2"
+                    >
+                      {isFetchingIntel ? (
+                        <>
+                          <span className="w-3 h-3 border-2 border-black border-t-transparent rounded-full animate-spin"></span>
+                          CONTACTING TELEMETRY SWARM...
+                        </>
+                      ) : (
+                        <>
+                          <span>🌐 SYNCHRONIZE THREAT TELEMETRY</span>
+                        </>
+                      )}
+                    </button>
+                    {intelError && (
+                      <p className="text-[10px] text-red-400 font-mono bg-red-950/40 p-2 rounded border border-red-900/30 mt-2">{intelError}</p>
+                    )}
+                  </div>
+                </div>
+
+                {/* Threat Telemetry Summary Map */}
+                <div className="md:col-span-2 bg-[#0c0c0d] border border-cyan-950/50 p-4 rounded-sm flex flex-col justify-between">
+                  <div>
+                    <div className="flex justify-between items-center border-b border-[#222]/80 pb-1.5 mb-3">
+                      <span className="text-[10px] font-mono font-bold text-gray-400 uppercase tracking-widest block flex items-center gap-1.5">
+                        <Terminal className="w-3.5 h-3.5 text-cyan-400" /> REAL-TIME CORRELATION REPORT
+                      </span>
+                      {threatIntelData && (
+                        <span className="text-[9px] font-mono bg-cyan-950 text-[#00f3ff] border border-cyan-900 px-2 py-0.5 rounded animate-pulse">
+                          CORRELATOR FEED SYNCED
+                        </span>
+                      )}
+                    </div>
+
+                    {!threatIntelData ? (
+                      <div className="flex flex-col items-center justify-center py-12 text-center">
+                        <AlertTriangle className="w-8 h-8 text-[#555] mb-2 animate-bounce" />
+                        <p className="text-[11px] text-gray-400 font-mono max-w-sm">
+                          Terminal standing by. Click "SYNCHRONIZE THREAT TELEMETRY" to query current CISA Known Exploits Feed and correlate them with active technology modules: <strong className="text-yellow-500 font-mono">{activeProject.techStack.join(', ')}</strong>.
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                        {/* CVE widget */}
+                        <div className="bg-[#05080c] border border-red-950 p-3 rounded">
+                          <span className="text-[9px] font-mono text-gray-500 uppercase">CISA Exploit Records</span>
+                          <div className="text-2xl font-mono text-red-500 font-bold mt-1">{threatIntelData.cves.length}</div>
+                          <p className="text-[10px] text-gray-400 font-mono mt-1 leading-normal">
+                            Vulnerabilities exploited in live adversary ransomware campaigns matching <strong className="text-red-400">{activeProject.industry}</strong> profiles.
+                          </p>
+                        </div>
+
+                        {/* OTX Pulse widget */}
+                        <div className="bg-[#080705] border border-yellow-950 p-3 rounded">
+                          <span className="text-[9px] font-mono text-gray-500 uppercase">AlienVault Pulses</span>
+                          <div className="text-2xl font-mono text-yellow-500 font-bold mt-1">{threatIntelData.otxPulses.length}</div>
+                          <p className="text-[10px] text-gray-400 font-mono mt-1 leading-normal">
+                            Hostile TCP scanner alerts and credential stuffing attacks documented by LevelBlue.
+                          </p>
+                        </div>
+
+                        {/* VirusTotal summary */}
+                        <div className="bg-[#050907] border border-green-950 p-3 rounded">
+                          <span className="text-[9px] font-mono text-gray-500 uppercase">VirusTotal Gateway Rep</span>
+                          <div className="text-xl font-mono text-green-400 font-extrabold mt-1.5 uppercase tracking-wide">
+                            {threatIntelData.vtStatus === 'clean' ? 'CLEAN (0/64)' : `SUSPICIOUS (${threatIntelData.vtDetections} alerts)`}
+                          </div>
+                          <p className="text-[10px] text-gray-400 font-mono mt-1 leading-normal">
+                            Real-time host domain checks and reputation updates for configured APIs.
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {threatIntelData && (
+                    <div className="mt-4 bg-[#060c12] border border-cyan-900/40 p-3 rounded flex flex-col sm:flex-row sm:items-center justify-between gap-3 font-mono">
+                      <div className="space-y-0.5">
+                        <span className="text-[9.5px] font-mono bg-cyan-950 text-cyan-400 px-1 rounded">MASTER ASSESSMENT OVERLAY</span>
+                        <p className="text-[10.5px] text-gray-350">
+                          Ready to overlay threats? Injecting these live exploits adds new vectors to the Threat Modeling matrix and triggers design adaptations.
+                        </p>
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={injectLiveThreatsToModel}
+                          disabled={hasInjectedLiveThreats}
+                          className={`text-[10.5px] font-mono py-1.5 px-4 rounded border transition-all cursor-pointer whitespace-nowrap ${
+                            hasInjectedLiveThreats
+                              ? 'bg-green-950 text-green-400 border-green-905 pointer-events-none'
+                              : 'bg-red-500/10 text-red-450 border-red-500/30 hover:bg-red-500/20'
+                          }`}
+                        >
+                          {hasInjectedLiveThreats ? '📥 OVERLAY APPLIED' : '📥 OVERLAY CVES & LIVE THREATS'}
+                        </button>
+                        {hasInjectedLiveThreats && (
+                          <button
+                            onClick={() => {
+                              setThreatIntelData(null);
+                              setHasInjectedLiveThreats(false);
+                            }}
+                            className="bg-[#111] hover:bg-[#202020] border border-[#333] text-gray-400 px-2 py-1 text-[10px] rounded cursor-pointer"
+                          >
+                            RESET
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Advanced Indicators & CISA CVE Table Stream */}
+              {threatIntelData && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
+                  {/* Indicators of Compromise Panel */}
+                  <div className="bg-[#050505] border border-[#222] rounded-sm p-4">
+                    <h3 className="text-xs font-mono font-bold text-amber-500 uppercase tracking-widest border-b border-[#222] pb-2 mb-3 flex items-center gap-1.5">
+                      <span>🕵️ Correlated Indicators of Compromise (IoCs)</span>
+                    </h3>
+                    <p className="text-[11px] text-gray-400 font-mono mb-3 leading-relaxed">
+                      Active IP and file hash blocklists associated with {activeProject.industry} intrusions. Intercept rules configured:
+                    </p>
+                    <div className="space-y-2 max-h-[300px] overflow-y-auto no-scrollbar pb-1">
+                      {threatIntelData.iocs.map((ioc: any, index: number) => {
+                        // Check if relevant to user's technology
+                        const isDatabaseIoc = ioc.value.includes('Postgres') || ioc.rep.toLowerCase().includes('postgres') || ioc.rep.toLowerCase().includes('database');
+                        const isRelevant = isDatabaseIoc ? activeProject.techStack.includes('PostgreSQL') || activeProject.techStack.includes('MongoDB') : true;
+
+                        return (
+                          <div key={index} className="bg-[#0a0a0b] border border-[#222] p-2.5 rounded flex items-start justify-between gap-3 text-[11px] font-mono">
+                            <div className="space-y-1 flex-1">
+                              <div className="flex items-center gap-2">
+                                <span className="bg-[#111] text-[#999] px-1.5 py-0.5 border border-[#222] rounded text-[9px] uppercase font-bold">{ioc.type}</span>
+                                <span className="text-gray-150 break-all font-semibold font-mono">{ioc.value}</span>
+                              </div>
+                              <p className="text-gray-400 text-[10px]">{ioc.rep}</p>
+                              <span className="text-[9px] text-[#666] block font-mono">Telemetry Source: {ioc.context}</span>
+                            </div>
+                            <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold border shrink-0 ${
+                              isRelevant 
+                                ? 'bg-red-950/65 text-red-400 border-red-900/60'
+                                : 'bg-gray-900 text-gray-500 border-gray-800'
+                            }`}>
+                              {isRelevant ? 'CORRELATED (HIGH EXPOSURE)' : 'LOW PRIORITY'}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* CISA Known Exploits Detail Panel */}
+                  <div className="bg-[#050505] border border-[#222] rounded-sm p-4 flex flex-col justify-between">
+                    <div>
+                      <h3 className="text-xs font-mono font-bold text-cyan-400 uppercase tracking-widest border-b border-[#222] pb-2 mb-3">
+                        📋 CISA Vulnerabilities Assessment
+                      </h3>
+                      <p className="text-[11px] text-gray-400 font-mono mb-3">
+                        These vulnerabilities are officially documented by CISA as under active exploit. Select any exploit to investigate.
+                      </p>
+
+                      <div className="space-y-2 max-h-[320px] overflow-y-auto no-scrollbar pr-1 pb-1">
+                        {threatIntelData.cves.map((cve: any) => (
+                          <div key={cve.cveID} className="bg-[#090b0e] border border-[#1b252f] p-3 rounded text-[11px] font-mono space-y-2">
+                            <div className="flex justify-between items-center border-b border-[#1b252f]/60 pb-1.5">
+                              <span className="text-red-400 font-bold tracking-wider">{cve.cveID}</span>
+                              <span className="text-[10px] text-gray-400 font-semibold">{cve.product} ({cve.vendorProject})</span>
+                            </div>
+                            
+                            <div>
+                              <h4 className="text-gray-200 font-bold text-xs">{cve.vulnerabilityName}</h4>
+                              <p className="text-gray-400 text-[10.5px] leading-relaxed mt-1">{cve.shortDescription}</p>
+                            </div>
+
+                            <div className="bg-[#03060a] p-2 border border-[#1b252f]/40 rounded mt-1.5 text-[10.5px]">
+                              <span className="text-cyan-400 block font-bold mb-1">&rarr; REQUIRED ENGINEERING MITIGATION REMEDIATION:</span>
+                              <p className="text-gray-300 leading-relaxed">{cve.requiredAction}</p>
+                              <div className="flex justify-between text-[9px] text-gray-500 mt-2">
+                                <span>Due date: {cve.dueDate}</span>
+                                <span>Ransomware Campaign: <strong className="text-red-400 font-bold">{cve.knownRansomwareCampaignUse || 'Active'}</strong></span>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* PAGE 4: Node-based Architecture Visualizer & Builder */}
           {activeTab === 'visualizer' && activeProject && activeProject.analysis && (
